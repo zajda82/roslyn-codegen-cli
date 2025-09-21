@@ -68,7 +68,7 @@ public static class Program
         driver.RunGeneratorsAndUpdateCompilation(compilation, out var result, out var diagnostics);
         
         // Report any errors coming from source generators
-        var allDiagnostics = result.GetDiagnostics().Concat(driver.GetRunResult().Diagnostics).Concat(diagnostics);
+        var allDiagnostics = result.GetDiagnostics().Concat(diagnostics);
         foreach (var diagnostic in allDiagnostics)
         {
             Console.Error.WriteLine(diagnostic.ToString());
