@@ -46,7 +46,9 @@ public static class Program
             var options = new InMemoryOptionsProvider(props);
 
             var driver = CSharpGeneratorDriver.Create([generator], additionalTexts: additionalTexts, optionsProvider: options);
-            driver.RunGeneratorsAndUpdateCompilation(compilation, out var result, out _);
+            
+            
+            driver.RunGeneratorsAndUpdateCompilation(compilation, out var result, out var diagnostics);
 
             // 3) write out every file the generator produced
             Directory.CreateDirectory(outDir);
@@ -56,9 +58,9 @@ public static class Program
                 File.WriteAllText(Path.Combine(args[2], name), tree.ToString());
             }
             
-            // Report any errors
-            var diags = result.GetDiagnostics().Concat(driver.GetRunResult().Diagnostics);
-            var errors = diags.Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
+            // Report any errors coming from source generators
+            var allDiagnostics = result.GetDiagnostics().Concat(driver.GetRunResult().Diagnostics).Concat(diagnostics);
+            var errors = allDiagnostics.Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
             foreach (var diagnostic in errors)
             {
                 Console.Error.WriteLine(diagnostic.ToString());
