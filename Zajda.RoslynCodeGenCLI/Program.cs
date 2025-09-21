@@ -15,59 +15,30 @@ public static class Program
     {
         if (args.Length < 3)
         {
-            Console.WriteLine("Usage: CodeGenRunner <Generator.dll> <Schema.json> <OutDir> [-P:Key=Value]...");
+            Console.WriteLine("Usage: CodeGenRunner <Generator.dll> <OutDir> [-T:AdditionalTextPath] [-P:Key=Value]...");
             return;
         }
 
         try
         {
             var assemblyPath = Path.GetFullPath(args[0]);
-            var schemaPath = Path.GetFullPath(args[1]);
-            var outDir = Path.GetFullPath(args[2]);
-            var props = ParseProps(args.Skip(3).Where(a => a.StartsWith("-P:")));
+            var outDir = Path.GetFullPath(args[1]);
+            var additionalTextPath = args.Skip(2).FirstOrDefault(a => a.StartsWith("-T:"))?[3..];
 
-            ValidateFiles(assemblyPath, schemaPath, outDir);
-
-            // 1) load the generator
-            var asm      = Assembly.LoadFrom(assemblyPath);
-            var genType  = GetGeneratorType(asm);
-            var generator = ((IIncrementalGenerator)Activator.CreateInstance(genType)!).AsSourceGenerator();
-
-            // 2) feed it an empty compilation (or add references/texts if it needs them)
-            var tpa = ((string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES"))!.Split(Path.PathSeparator);
-            var refs = tpa.Select(p => MetadataReference.CreateFromFile(p));
-            var emptyTree   = CSharpSyntaxTree.ParseText("");
-            var compilation = CSharpCompilation.Create(Guid.NewGuid().ToString(), 
-                [emptyTree],
-                refs);
-
-            var additionalTexts = new List<AdditionalText> { new FileAdditionalText(schemaPath) };
-
-            var options = new InMemoryOptionsProvider(props);
-
-            var driver = CSharpGeneratorDriver.Create([generator], additionalTexts: additionalTexts, optionsProvider: options);
-            
-            
-            driver.RunGeneratorsAndUpdateCompilation(compilation, out var result, out var diagnostics);
-
-            // 3) write out every file the generator produced
-            Directory.CreateDirectory(outDir);
-            foreach (var tree in result.SyntaxTrees.Except(compilation.SyntaxTrees))
+            var additionalTexts = new List<AdditionalText>();
+            if (additionalTextPath != null)
             {
-                var name = string.IsNullOrEmpty(tree.FilePath) ? $"{genType.Name}_{Guid.NewGuid()}.g.cs" : Path.GetFileName(tree.FilePath);
-                File.WriteAllText(Path.Combine(args[2], name), tree.ToString());
+                additionalTexts = [new FileAdditionalText(Path.GetFullPath(additionalTextPath))];
             }
             
-            // Report any errors coming from source generators
-            var allDiagnostics = result.GetDiagnostics().Concat(driver.GetRunResult().Diagnostics).Concat(diagnostics);
-            var errors = allDiagnostics.Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
-            foreach (var diagnostic in errors)
-            {
-                Console.Error.WriteLine(diagnostic.ToString());
-            }
-                
-            var generatedFiles = result.SyntaxTrees.Except(compilation.SyntaxTrees).Count();
-            Console.WriteLine($"Successfully generated {generatedFiles} file(s) to {outDir}");
+            var props = ParseProps(args.Skip(2).Where(a => a.StartsWith("-P:")));
+
+            ValidateFiles(assemblyPath, outDir);
+            var asm = Assembly.LoadFrom(assemblyPath);
+            var generatorType  = GetGeneratorType(asm);
+            
+            var syntaxTrees =  RunGenerator(generatorType, additionalTexts, props);
+            WriteResults(outDir, syntaxTrees, generatorType);
         }
         catch (Exception ex)
         {
@@ -75,6 +46,49 @@ public static class Program
             Environment.Exit(1);
         }
         
+    }
+
+    public static IList<SyntaxTree> RunGenerator(Type generatorType, List<AdditionalText> additionalTexts, IDictionary<string, string> props)
+    {
+        // 1) load the generator
+        var generator = ((IIncrementalGenerator)Activator.CreateInstance(generatorType)!).AsSourceGenerator();
+
+        // 2) feed it an empty compilation (or add references/texts if it needs them)
+        var tpa = ((string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES"))!.Split(Path.PathSeparator);
+        var refs = tpa.Select(p => MetadataReference.CreateFromFile(p));
+        var emptyTree   = CSharpSyntaxTree.ParseText("");
+        var compilation = CSharpCompilation.Create(Guid.NewGuid().ToString(), 
+            [emptyTree],
+            refs);
+
+        var options = new InMemoryOptionsProvider(props);
+
+        var driver = CSharpGeneratorDriver.Create([generator], additionalTexts: additionalTexts, optionsProvider: options);
+            
+        driver.RunGeneratorsAndUpdateCompilation(compilation, out var result, out var diagnostics);
+        
+        // Report any errors coming from source generators
+        var allDiagnostics = result.GetDiagnostics().Concat(driver.GetRunResult().Diagnostics).Concat(diagnostics);
+        foreach (var diagnostic in allDiagnostics)
+        {
+            Console.Error.WriteLine(diagnostic.ToString());
+        }
+
+        return result.SyntaxTrees.Except(compilation.SyntaxTrees).ToList();
+    }
+
+    private static void WriteResults(string outDir, IList<SyntaxTree> trees, Type generatorType)
+    {
+        // 3) write out every file the generator produced
+        Directory.CreateDirectory(outDir);
+        foreach (var tree in trees)
+        {
+            var name = string.IsNullOrEmpty(tree.FilePath) ? $"{generatorType.Name}_{Guid.NewGuid()}.g.cs" : Path.GetFileName(tree.FilePath);
+            File.WriteAllText(Path.Combine(outDir, name), tree.ToString());
+        }
+        
+        var generatedFiles = trees.Count;
+        Console.WriteLine($"Successfully generated {generatedFiles} file(s) to {outDir}");
     }
 
     private static IDictionary<string, string> ParseProps(IEnumerable<string> args)
@@ -109,13 +123,10 @@ public static class Program
         return generatorTypes[0];
     }
 
-    private static void ValidateFiles(string assemblyPath, string schemaPath, string outDir)
+    private static void ValidateFiles(string assemblyPath, string outDir)
     {
         if (!File.Exists(assemblyPath))
             throw new FileNotFoundException($"Generator assembly not found: {assemblyPath}");
-
-        if (!File.Exists(schemaPath))
-            throw new FileNotFoundException($"Schema file not found: {schemaPath}");
 
         if (!Directory.Exists(outDir))
         {

@@ -39,7 +39,7 @@ dotnet build
 ## Usage
 
 ```powershell
-roslyncodegen <Generator.dll> <Schema.json> <OutDir> [-P:Key=Value]...
+roslyncodegen <Generator.dll> <OutDir> [-T:AdditionalTextPath] [-P:Key=Value]...
 ```
 
 ### Parameters
