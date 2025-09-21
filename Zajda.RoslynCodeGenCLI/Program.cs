@@ -56,6 +56,14 @@ public static class Program
                 File.WriteAllText(Path.Combine(args[2], name), tree.ToString());
             }
             
+            // Report any errors
+            var diags = result.GetDiagnostics().Concat(driver.GetRunResult().Diagnostics);
+            var errors = diags.Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
+            foreach (var diagnostic in errors)
+            {
+                Console.Error.WriteLine(diagnostic.ToString());
+            }
+                
             var generatedFiles = result.SyntaxTrees.Except(compilation.SyntaxTrees).Count();
             Console.WriteLine($"Successfully generated {generatedFiles} file(s) to {outDir}");
         }
